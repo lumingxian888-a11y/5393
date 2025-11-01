@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>539 選號篩選（已修正嚴格判定）</title>
+<style>
+  :root{
+    --black:#111;
+    --bg:#fafafa;
+    --red:#d9413a;
+    --blue:#2b7bd3;
+    --green:#2f9f50;
+    --big-circle:72px; /* 大圈直徑，越大越醒目 */
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Noto Sans TC",Arial;background:var(--bg);color:#111}
+  /* 右上選擇按鈕（黑底白字大圈） */
+  #selectBtn{
+    position:fixed;top:12px;right:12px;z-index:1200;
+    width:var(--big-circle);height:var(--big-circle);border-radius:50%;
+    background:var(--black);color:#fff;font-weight:800;font-size:16px;
+    display:flex;align-items:center;justify-content:center;border:none;box-shadow:0 6px 18px rgba(0,0,0,0.25);
+    touch-action:manipulation;
+  }
+
+  .wrap{max-width:1100px;margin:110px auto 60px;padding:0 12px}
+  .top-circles{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+  .top-circles .c{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,0.12)}
+  .top-circles .hidden{visibility:hidden}
+
+  /* table */
+  table{width:100%;border-collapse:collapse;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.06)}
+  th,td{padding:8px 6px;border:1px solid #eee;text-align:center;font-size:14px}
+  thead th{background:#f3f3f3;font-weight:700}
+  td.numcell{font-weight:700}
+
+  /* 以圈包號碼（在 cell 裡直接改成圈） */
+  .match-dot{
+    display:inline-flex;align-items:center;justify-content:center;border-radius:50%;
+    padding:6px;width:46px;height:46px;color:#fff;font-weight:900;font-size:16px;
+  }
+  .match-dot.red{background:var(--red)}
+  .match-dot.blue{background:var(--blue)}
+  .match-dot.green{background:var(--green)}
+
+  /* modal 全螢幕控制板 */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,0.65);display:none;z-index:1300;align-items:center;justify-content:center}
+  .panel{width:100%;height:100%;background:#fff;display:flex;flex-direction:column;padding:10px;box-sizing:border-box}
+  .grid-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:6px}
+  .grid{display:grid;gap:10px;grid-template-columns:repeat(4,1fr);width:100%;max-width:560px;grid-auto-rows:calc((100vh - 140px)/10)}
+  .cell{border-radius:12px;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid #ddd;font-weight:800;font-size:18px;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
+  .cell.return{background:#666;color:#fff}
+  .cell.num{background:#fff;color:#111}
+  .cell.red{background:var(--red);color:#fff}
+  .cell.blue{background:var(--blue);color:#fff}
+  .cell.green{background:var(--green);color:#fff}
+  .panel-footer{padding:10px;text-align:center;color:#666}
+
+  @media(max-width:420px){
+    :root{--big-circle:64px}
+    .match-dot{width:40px;height:40px;padding:4px;font-size:14px}
+    .top-circles .c{width:48px;height:48px}
+  }
+</style>
+</head>
+<body>
+
+<button id="selectBtn" aria-label="選擇">選擇</button>
+
+<div class="wrap">
+  <div class="top-circles" id="topCircles">
+    <div id="tc0" class="c hidden" style="background:var(--red)"></div>
+    <div id="tc1" class="c hidden" style="background:var(--blue)"></div>
+    <div id="tc2" class="c hidden" style="background:var(--green)"></div>
+  </div>
+
+  <div id="tableWrap"><div id="loading" style="padding:14px">載入資料中…</div></div>
+</div>
+
+<!-- modal -->
+<div class="modal" id="modal" role="dialog" aria-modal="true">
+  <div class="panel" id="panel">
+    <div class="grid-wrap"><div class="grid" id="grid"></div></div>
+    <div class="panel-footer">選號：依序變色（紅 → 藍 → 綠），最多 3 個。按「返回」套用並回主畫面。</div>
+  </div>
+</div>
+
+<script>
+/* ========== 設定 ========== */
+const SRC = "https://lumingxian88com.github.io/88/index.html";
+
+/* ========== 狀態 ========== */
+let selected = []; // 已選號 (string '00'..'39')
+let tableData = []; // {date,week,nums:[]}
+let tableEl = null;
+
+/* ======= 工具 ======= */
+const pad = n => (''+n).padStart(2,'0');
+const colorNames = ['red','blue','green'];
+const colorValues = ['var(--red)','var(--blue)','var(--green)'];
+
+/* ======= 建 grid（直行排列） ======= */
+const grid = document.getElementById('grid');
+function buildGrid(){
+  grid.innerHTML = '';
+  for(let r=0;r<10;r++){
+    createCell(pad(30+r));
+    createCell(pad(20+r));
+    createCell(pad(10+r));
+    if(r===0) createReturnCell();
+    else createCell(pad(r));
+  }
+}
+function createCell(text){
+  const el = document.createElement('div');
+  el.className = 'cell num';
+  el.textContent = text;
+  el.dataset.num = text;
+  el.addEventListener('click', ()=> toggleSelect(text, el));
+  grid.appendChild(el);
+}
+function createReturnCell(){
+  const el = document.createElement('div');
+  el.className = 'cell return';
+  el.textContent = '返回';
+  el.dataset.num = '00';
+  el.addEventListener('click', ()=> {
+    // apply and close
+    closeModalApply();
+  });
+  grid.appendChild(el);
+}
+
+/* toggle 選號（modal 內） */
+function toggleSelect(num, el){
+  const idx = selected.indexOf(num);
+  if(idx !== -1){
+    selected.splice(idx,1);
+  } else {
+    if(selected.length < 3) selected.push(num);
+    else return;
+  }
+  refreshGridUI();
+}
+
+/* 更新 grid 視覺 */
+function refreshGridUI(){
+  for(const c of grid.children){
+    c.classList.remove('red','blue','green');
+  }
+  selected.forEach((num,i)=>{
+    for(const c of grid.children){
+      if(c.dataset.num === num) c.classList.add(colorNames[i]);
+    }
+  });
+}
+
+/* open / close modal */
+const modal = document.getElementById('modal');
+const selectBtn = document.getElementById('selectBtn');
+
+function openModal(){
+  // 按選擇時重置：清除 top circles & table highlights (user requested)
+  resetVisualsForNewPick();
+  buildGrid();
+  refreshGridUI();
+  modal.style.display = 'flex';
+}
+function closeModalApply(){
+  modal.style.display = 'none';
+  applySelection();
+}
+
+/* fetch 舊表格並重建 tableData */
+async function loadTable(){
+  try{
+    const res = await fetch(SRC);
+    const txt = await res.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(txt,'text/html');
+    const srcTable = doc.querySelector('table');
+    if(!srcTable){
+      document.getElementById('tableWrap').innerHTML = '<div style="padding:14px">找不到來源表格。</div>';
+      return;
+    }
+    const rows = Array.from(srcTable.querySelectorAll('tr'));
+    tableData = [];
+    rows.forEach((tr, idx) => {
+      const tds = Array.from(tr.querySelectorAll('td,th'));
+      if(tds.length >= 7){
+        // 若第一列是 header（包含"日期"或"號1"）跳過
+        if(idx === 0){
+          const f = (tds[0].textContent||'').trim();
+          if(/日期|號1|Date/i.test(f)) return;
+        }
+        const date = (tds[0].textContent||'').trim();
+        const week = (tds[1].textContent||'').trim();
+        const nums = tds.slice(2,7).map(td => (td.textContent||'').trim().padStart(2,'0'));
+        tableData.push({date,week,nums});
+      }
+    });
+    renderTable();
+  }catch(err){
+    document.getElementById('tableWrap').innerHTML = '<div style="padding:14px">載入錯誤：'+(err.message||err)+'</div>';
+    console.error(err);
+  }
+}
+
+/* 建表格（會保留日期與星期欄） */
+function renderTable(){
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const htr = document.createElement('tr');
+  htr.innerHTML = '<th>日期</th><th>星期</th><th>號1</th><th>號2</th><th>號3</th><th>號4</th><th>號5</th>';
+  thead.appendChild(htr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  tableData.forEach((row, idx) => {
+    const tr = document.createElement('tr');
+    tr.dataset.index = idx;
+    // 日期 / 星期
+    const tdDate = document.createElement('td'); tdDate.textContent = row.date; tr.appendChild(tdDate);
+    const tdWeek = document.createElement('td'); tdWeek.textContent = row.week; tr.appendChild(tdWeek);
+    // 五個號
+    row.nums.forEach(n => { const td = document.createElement('td'); td.className='numcell'; td.textContent = n; tr.appendChild(td); });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  const wrap = document.getElementById('tableWrap');
+  wrap.innerHTML = '';
+  wrap.appendChild(table);
+  tableEl = table;
+}
+
+/* apply selection: 顯示 top circles + highlight matching numbers in-table + filter rows (嚴格 >= 選取數) */
+function applySelection(){
+  // 顯示 top circles
+  const tc0 = document.getElementById('tc0'), tc1 = document.getElementById('tc1'), tc2 = document.getElementById('tc2');
+  [tc0,tc1,tc2].forEach(el=>{ el.classList.add('hidden'); el.textContent=''; });
+  selected.forEach((num,i)=>{
+    const el = [tc0,tc1,tc2][i];
+    el.classList.remove('hidden'); el.textContent = num;
+    if(i===0) el.style.background = 'var(--red)';
+    if(i===1) el.style.background = 'var(--blue)';
+    if(i===2) el.style.background = 'var(--green)';
+  });
+
+  // 在表格內把符合的號碼以對應顏色圈包住；並進行嚴格篩選（matchCount >= selected.length）
+  if(!tableEl) return;
+  const rows = tableEl.querySelectorAll('tbody tr');
+  rows.forEach(tr => {
+    const idx = +tr.dataset.index;
+    const nums = tableData[idx].nums;
+    // count matches among selected
+    let matchCount = 0;
+    // 先清除任何已有的 match-dot
+    const tds = tr.querySelectorAll('td.numcell');
+    tds.forEach(td => {
+      // 還原原始文字（避免重複套用）
+      const raw = td.dataset.orig || td.textContent.trim();
+      td.dataset.orig = raw;
+      td.innerHTML = raw;
+    });
+
+    // count & replace matching numbers with colored circles
+    selected.forEach((s, sIdx) => {
+      nums.forEach((n, nIdx) => {
+        if(n === s){
+          matchCount++;
+          // find the corresponding td (2..6)
+          const td = tr.querySelectorAll('td.numcell')[nIdx];
+          // replace content with colored circle span
+          const span = document.createElement('span');
+          span.className = 'match-dot ' + colorNames[sIdx];
+          span.textContent = n;
+          td.innerHTML = '';
+          td.appendChild(span);
+        }
+      });
+    });
+
+    // 嚴格篩選：只有當 matchCount >= selected.length 才顯示
+    if(selected.length === 0){
+      tr.style.display = '';
+    } else {
+      tr.style.display = matchCount >= selected.length ? '' : 'none';
+    }
+  });
+}
+
+/* reset: 再按「選擇」時呼叫（清除所有樣式與選擇） */
+function resetAll(){
+  selected = [];
+  // 清 top circles
+  ['tc0','tc1','tc2'].forEach(id => {
+    const el = document.getElementById(id);
+    el.classList.add('hidden'); el.textContent=''; el.style.background='';
+  });
+  // 恢復表格原始內容與顯示
+  if(tableEl){
+    const rows = tableEl.querySelectorAll('tbody tr');
+    rows.forEach((tr, idx) => {
+      const tds = tr.querySelectorAll('td.numcell');
+      tds.forEach((td, j) => {
+        const orig = td.dataset.orig || td.textContent.trim();
+        td.textContent = orig;
+      });
+      tr.style.display = '';
+    });
+  }
+}
+
+/* openModal 行為：按「選擇」時 */
+selectBtn.addEventListener('click', ()=>{
+  // 如果 modal 尚未開啟，先清除所有（依你要求：再按選擇就是重新開始）
+  resetAll();
+  buildGrid(); refreshGridUI();
+  modal.style.display = 'flex';
+});
+
+/* 點遮罩不自動關閉（必須用返回格關閉） */
+modal.addEventListener('click', e => { if(e.target === modal) {/* 不關閉 */} });
+
+/* close apply */
+function closeModalApply(){ modal.style.display = 'none'; applySelection(); }
+
+/* 建 grid 並初始化 */
+buildGrid();
+
+/* 載入資料並 render */
+loadTable();
+
+/* 初始 refresh (sync) */
+function refreshGridUI(){
+  for(const c of grid.children){ c.classList.remove('red','blue','green'); }
+  selected.forEach((num,i)=>{ for(const c of grid.children){ if(c.dataset.num === num) c.classList.add(colorNames[i]); } });
+}
+</script>
+</body>
+</html>
